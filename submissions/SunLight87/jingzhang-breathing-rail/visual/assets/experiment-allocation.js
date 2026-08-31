@@ -23,7 +23,13 @@ const SCRIPT_DIR = __dirname;
 const PACKAGE_DIR = path.resolve(SCRIPT_DIR, "..", "..");
 // An optional authoring workbench may be a sibling of the repository. Public
 // replay does not depend on that location and falls back to packaged inputs.
-const WORKSPACE_ROOT = path.resolve(PACKAGE_DIR, "..", "..", "..", "..");
+const WORKSPACE_ROOT_CANDIDATES = [
+  path.resolve(PACKAGE_DIR, "..", "..", "..", ".."),
+  path.resolve(PACKAGE_DIR, "..", "..", "..", "..", ".."),
+];
+const WORKSPACE_ROOT = WORKSPACE_ROOT_CANDIDATES.find((candidate) => (
+  fs.existsSync(path.join(candidate, "workbench", "baseline", "experiment"))
+)) || WORKSPACE_ROOT_CANDIDATES[0];
 const EXPERIMENT_ROOT = path.join(WORKSPACE_ROOT, "workbench", "baseline", "experiment");
 const TASK_ROOT = path.join(WORKSPACE_ROOT, "workbench", "baseline", "task");
 
@@ -199,6 +205,16 @@ function writeJsonBatch(entries) {
       if (exists(item.temporary)) fs.unlinkSync(item.temporary);
     }
     throw error;
+  }
+}
+
+function assertJsonBatchCurrent(entries) {
+  for (const [filePath, value] of entries) {
+    const resolved = path.resolve(filePath);
+    if (!exists(resolved)) fail(`check-only output missing: ${resolved}`);
+    const expected = canonicalJson(value);
+    const observed = fs.readFileSync(resolved, "utf8");
+    if (observed !== expected) fail(`check-only output drift: ${resolved}`);
   }
 }
 
@@ -727,7 +743,7 @@ function buildRunLog(inputs, catalogErrors, feasible, pareto, selected, negative
   };
 }
 
-function buildSimulation(runLog, inputs, selected, negativeResults) {
+function buildSimulation(runLog, inputs, selected, negativeResults, inputBundleHash) {
   const taskBase = {
     dispatch_schema_valid: true,
     audit_complete: true,
@@ -780,7 +796,7 @@ function buildSimulation(runLog, inputs, selected, negativeResults) {
     seed: SEED,
     program_ref: "visual/assets/experiment-allocation.js",
     input_bundle_ref: "visual/assets/experiment-inputs.json",
-    input_bundle_sha256: sha256File(INPUTS_PATH),
+    input_bundle_sha256: inputBundleHash,
     scope: "One deterministic assignment question: allocate S01-S12 to three role IDs without changing coordinates.",
     task_outcome_rule: "An outcome equal to success or ending in _success is successful; negative fixtures must be rejected successfully.",
     task_count: tasks.length,
@@ -827,7 +843,7 @@ function assertResult(inputs, catalogErrors, feasible, scored, pareto, selected,
   if (scored.length !== feasible.length) fail("scored assignment count does not match feasible count");
 }
 
-function run() {
+function run(options = {}) {
   const inputs = loadAuthoritativeInputs();
   const catalogErrors = validateCatalog(inputs.catalog, inputs.config);
   if (catalogErrors.length) fail(`catalog hard-gate errors: ${catalogErrors.join(", ")}`);
@@ -864,20 +880,26 @@ function run() {
   const inputBundle = buildExperimentInputs(inputs);
   const inputBundleHash = canonicalHash(inputBundle);
   const runLog = buildRunLog(inputs, catalogErrors, feasible, pareto, selected, negativeResults, inputBundleHash);
-  const simulation = buildSimulation(runLog, inputs, selected, negativeResults);
-  writeJsonBatch([
+  const simulation = buildSimulation(runLog, inputs, selected, negativeResults, inputBundleHash);
+  const outputs = [
     [INPUTS_PATH, inputBundle],
     [RUN_PATH, runLog],
     [SIMULATION_PATH, simulation],
-  ]);
+  ];
+  if (options.checkOnly) assertJsonBatchCurrent(outputs);
+  else writeJsonBatch(outputs);
   return { inputs, feasible, scored, pareto, selected, negativeResults, runLog, simulation };
 }
 
 function main() {
   try {
-    const result = run();
+    const checkOnly = process.argv.includes("--check-only");
+    const unknownArgs = process.argv.slice(2).filter((arg) => arg !== "--check-only");
+    if (unknownArgs.length) fail(`unknown argument(s): ${unknownArgs.join(", ")}`);
+    const result = run({ checkOnly });
     process.stdout.write(`${JSON.stringify({
       status: result.runLog.status,
+      check_only: checkOnly,
       feasible_assignment_count: result.feasible.length,
       pareto_assignment_count: result.pareto.length,
       selected_candidate_count: result.selected.length,

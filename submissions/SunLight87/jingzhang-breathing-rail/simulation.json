@@ -8,7 +8,7 @@
     "tool_schema_pass_rate": 1
   },
   "input_bundle_ref": "visual/assets/experiment-inputs.json",
-  "input_bundle_sha256": "25da7c03fc073bb16f2bcad7fe61e35d2b143424151f65d65a77bc7c8ada71d7",
+  "input_bundle_sha256": "5a04363ea7c98921d82cf34735d466d260cab3490e18f40d66b0959199f580bf",
   "mode": "offline",
   "not_run": [
     "model invocation",
